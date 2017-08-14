@@ -9,6 +9,7 @@ from datetime import timedelta
 
 import voluptuous as vol
 import requests
+from requests.auth import HTTPBasicAuth
 
 from homeassistant.components.sensor import PLATFORM_SCHEMA
 from homeassistant.const import (
@@ -20,8 +21,11 @@ from homeassistant.util import Throttle
 REQUIREMENTS = ['xmltodict==0.11.0']
 
 _LOGGER = logging.getLogger(__name__)
-_RESOURCE = 'http://www.hydrodata.ch/xml/SMS.xml'
+#_RESOURCE = 'https://www.hydrodata.ch/data/hydroweb.xml'
+_RESOURCE = '/home/bliemli/Downloads/hydroweb.xml'
 
+CONF_USERNAME = 'username'
+CONF_PASSWORD = 'password'
 CONF_STATION = 'station'
 CONF_ATTRIBUTION = "Data provided by the Swiss Federal Office for the " \
                    "Environment FOEN"
@@ -44,6 +48,8 @@ ATTR_TEMPERATURE_MAX = 'temperature_max'
 MIN_TIME_BETWEEN_UPDATES = timedelta(minutes=30)
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
+    vol.Required(CONF_USERNAME): cv.string,
+    vol.Required(CONF_PASSWORD): cv.string,
     vol.Required(CONF_STATION): vol.Coerce(int),
     vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
 })
@@ -53,13 +59,22 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
     """Set up the Swiss hydrological sensor."""
     import xmltodict
 
+    username = config.get(CONF_USERNAME)
+    password = config.get(CONF_PASSWORD)
     name = config.get(CONF_NAME)
     station = config.get(CONF_STATION)
 
     try:
-        response = requests.get(_RESOURCE, timeout=5)
-        if any(str(station) == location.get('@StrNr') for location in
-               xmltodict.parse(response.text)['AKT_Data']['MesPar']) is False:
+        #response = requests.get(_RESOURCE, timeout=5, auth=HTTPBasicAuth(username, password))
+        #if any(str(station) == location.get('@number') for location in
+        #       #xmltodict.parse(response.text)['locations']['station']) is False:
+        #       xmltodict.parse(response.read())['locations']['station']) is False:
+        #    _LOGGER.error("The given station does not exist: %s", station)
+        #    return False
+        with open(_RESOURCE) as fd:
+          response = xmltodict.parse(fd.read())
+        if any(str(station) == location.get('@number') for location in
+               response['locations']['station']) is False:
             _LOGGER.error("The given station does not exist: %s", station)
             return False
     except requests.exceptions.ConnectionError:
@@ -71,7 +86,7 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
 
 
 class SwissHydrologicalDataSensor(Entity):
-    """Implementation of an Swiss hydrological sensor."""
+    """Implementation of a Swiss hydrological sensor."""
 
     def __init__(self, name, data):
         """Initialize the sensor."""
@@ -160,28 +175,31 @@ class HydrologicalData(object):
 
         details = {}
         try:
-            response = requests.get(_RESOURCE, timeout=5)
+            #response = requests.get(_RESOURCE, timeout=5)
+            with open(_RESOURCE) as fd:
+              response = xmltodict.parse(fd.read())
         except requests.exceptions.ConnectionError:
             _LOGGER.error("Unable to retrieve data from %s", _RESOURCE)
 
         try:
-            stations = xmltodict.parse(response.text)['AKT_Data']['MesPar']
+            #stations = xmltodict.parse(response.text)['locations']['station']
+            stations = response['locations']['station']
             # Water level: Typ="02", temperature: Typ="03", discharge: Typ="10"
             for station in stations:
-                if str(self.station) != station.get('@StrNr'):
+                if str(self.station) != station.get('@number'):
                     continue
                 for data in ['02', '03', '10']:
-                    if data != station.get('@Typ'):
+                    if data != station.get('@type'):
                         continue
-                    values = station.get('Wert')
+                    values = station.get('parameter')
                     if values is not None:
                         details[data] = {
                             'current': values[0],
                             'max': list(values[4].items())[1][1],
                             'mean': list(values[3].items())[1][1]}
 
-                    details['location'] = station.get('Name')
-                    details['update_time'] = station.get('Zeit')
+                    details['location'] = station.get('name')
+                    details['update_time'] = station.get('datetime')
 
             self.measurings = details
         except AttributeError:
